@@ -1,0 +1,54 @@
+
+{- The Computer Language Shootout
+   http://shootout.alioth.debian.org/
+   Written by Tom Pledger, 13 Nov 2006. modified by Don Stewart -}
+
+import Control.Concurrent (forkIO,yield)
+#if defined(STRICT)
+import Control.Concurrent.MVar.Strict
+#else
+import Control.Concurrent.MVar
+#endif
+import Control.Monad
+import System
+
+data Colour = Blue | Red | Yellow
+
+complement a b = case (a,b) of
+    (Red,Yellow)    -> Blue
+    (Red,Blue)      -> Yellow
+    (Red,Red)       -> Red
+    (Yellow,Blue)   -> Red
+    (Yellow,Red)    -> Blue
+    (Yellow,Yellow) -> Yellow
+    (Blue,Red)      -> Yellow
+    (Blue,Yellow)   -> Red
+    (Blue,Blue)     -> Blue
+
+colors = [Blue, Red, Yellow]
+
+data MP = MP !Int !(Maybe Colour) ![Int]
+
+main = do n     <- getArgs >>= readIO . head
+          waker <- newEmptyMVar
+          mpv   <- newMVar $ MP n Nothing []
+
+          let arrive c t = do
+                MP q w d <- takeMVar mpv
+                case w of
+                    _ | q == 0 -> if length d /= 3 then putMVar mpv $ MP 0 w (t:d)
+                                                   else print $ t + sum d
+
+                    Nothing    -> do putMVar mpv $ MP q (Just c) d
+                                     c' <- takeMVar waker
+                                     arrive c' $! t+1
+
+                    Just k     -> do let c' = complement k c
+                                     -- this should cause a space leak:
+                                     putMVar waker c'
+                                     putMVar mpv $ MP (q-1) Nothing d
+                                     arrive c' $! t+1
+
+          mapM_ (forkIO . flip arrive 0) colors
+          arrive Blue 0
+          replicateM_ 3 yield

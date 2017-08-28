@@ -1,0 +1,44 @@
+#!/bin/sh
+
+N=35
+M=5000000
+O=50000000
+
+ghc          -cpp -O -no-recomp -threaded --make mvar-test.hs -o lazy-mvar
+ghc -DSTRICT -cpp -O -no-recomp -threaded --make mvar-test.hs -o strict-mvar
+
+ghc          -cpp -O -no-recomp -threaded --make chan-test.hs -o lazy-chan
+ghc -DSTRICT -cpp -O -no-recomp -threaded --make chan-test.hs -o strict-chan
+
+ghc          -cpp -O -no-recomp -threaded --make thread-ring.hs -o lazy-thread-ring
+ghc -DSTRICT -cpp -O -no-recomp -threaded --make thread-ring.hs -o strict-thread-ring
+
+echo "******* Testing Chans ************"
+ 
+echo "** Should be slow:"
+/usr/bin/time ./lazy-chan   $N +RTS -tstderr -RTS > /dev/null
+
+echo "** Should be fast:"
+/usr/bin/time ./strict-chan $N +RTS -tstderr -RTS > /dev/null
+
+echo "** Should be twice as fast (on 2 cores)"
+/usr/bin/time ./strict-chan $N +RTS -N2 -tstderr -RTS > /dev/null
+
+echo "******* Testing MVars ************"
+ 
+echo "** Should have a space leak:"
+/usr/bin/time ./lazy-mvar   $M +RTS -tstderr -RTS > /dev/null
+
+echo "** Should run in constant space:"
+/usr/bin/time ./strict-mvar $M +RTS -tstderr -RTS > /dev/null
+
+echo "** Should pass (2 cores)"
+/usr/bin/time ./strict-mvar $M +RTS -N2 -tstderr -RTS > /dev/null
+
+echo "******* Testing thread-ring benchmark ************"
+
+echo "** Should be ok **"
+/usr/bin/time ./lazy-thread-ring $O +RTS -tstderr -RTS > /dev/null
+
+echo "** Should be no slower, use constant space **"
+/usr/bin/time ./strict-thread-ring $O +RTS -tstderr -RTS > /dev/null
