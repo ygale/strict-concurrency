@@ -1,4 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP, BangPatterns,
+             MagicHash, UnboxedTuples, ScopedTypeVariables
+#-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Concurrent.MVar.Strict
@@ -36,14 +38,14 @@ module Control.Concurrent.MVar.Strict
         , addMVarFinalizer -- :: MVar a -> IO () -> IO ()
     ) where
 
-import Control.Concurrent.MVar ( MVar, newEmptyMVar, takeMVar, 
+import Control.Concurrent.MVar ( newEmptyMVar, takeMVar, 
                   tryTakeMVar, isEmptyMVar, addMVarFinalizer
                 )
 import GHC.Exts
-import GHC.IOBase
+import GHC.Base
+import GHC.MVar (MVar(MVar))
 
-import Prelude
-import Control.OldException as Exception
+import Control.Exception as Exception
 -- import Control.Parallel.Strategies
 import Control.DeepSeq
 
@@ -92,7 +94,7 @@ newMVar value =
   from the 'MVar', puts it back, and also returns it.
 -}
 readMVar :: NFData a => MVar a -> IO a
-readMVar m = block $ do
+readMVar m = mask $ \_ -> do
     a <- takeMVar m
     putMVar m a
     return a
@@ -104,7 +106,7 @@ readMVar m = block $ do
   happens but before the put does.
 -}
 swapMVar :: NFData a => MVar a -> a -> IO a
-swapMVar mvar new = block $ do
+swapMVar mvar new = mask $ \_ -> do
     old <- takeMVar mvar
     putMVar mvar new
     return old
@@ -119,10 +121,10 @@ swapMVar mvar new = block $ do
 -- inlining has been reported to have dramatic effects; see
 -- http://www.haskell.org//pipermail/haskell/2006-May/017907.html
 withMVar :: NFData a => MVar a -> (a -> IO b) -> IO b
-withMVar m io = block $ do
+withMVar m io = mask $ \unmask -> do
     a <- takeMVar m
-    b <- Exception.catch (unblock (io a))
-            (\e -> do putMVar m a; throw e)
+    b <- Exception.catch (unmask (io a))
+            (\(e :: SomeException) -> do putMVar m a; throw e)
     putMVar m a
     return b
 
@@ -133,10 +135,10 @@ withMVar m io = block $ do
 -}
 {-# INLINE modifyMVar_ #-}
 modifyMVar_ :: NFData a => MVar a -> (a -> IO a) -> IO ()
-modifyMVar_ m io = block $ do
+modifyMVar_ m io = mask $ \unmask -> do
     a  <- takeMVar m
-    a' <- Exception.catch (unblock (io a))
-            (\e -> do putMVar m a; throw e)
+    a' <- Exception.catch (unmask (io a))
+            (\(e :: SomeException) -> do putMVar m a; throw e)
     putMVar m a'
 
 {-|
@@ -145,10 +147,10 @@ modifyMVar_ m io = block $ do
 -}
 {-# INLINE modifyMVar #-}
 modifyMVar :: NFData a => MVar a -> (a -> IO (a,b)) -> IO b
-modifyMVar m io = block $ do
+modifyMVar m io = mask $ \unmask -> do
     a      <- takeMVar m
-    (a',b) <- Exception.catch (unblock (io a))
-                (\e -> do putMVar m a; throw e)
+    (a',b) <- Exception.catch (unmask (io a))
+                (\(e :: SomeException) -> do putMVar m a; throw e)
     putMVar m a'
     return b
 

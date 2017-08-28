@@ -56,8 +56,6 @@ type Stream a = MVar (ChItem a)
 
 data ChItem a = ChItem !a (Stream a)
 
-instance NFData (MVar a)
-
 instance NFData a => NFData (ChItem a) where
     rnf (ChItem a s) = rnf a `seq` rnf s
 
