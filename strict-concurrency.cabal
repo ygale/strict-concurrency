@@ -12,9 +12,9 @@ Description:
 License:        BSD3
 License-File:   LICENSE
 Author:         Don Stewart <dons@galois.com>
-Maintainer:     Don Stewart <dons@galois.com>
-Copyright:      (c) 2007-10 Don Stewart
-Homepage:       http://code.haskell.org/~dons/code/strict-concurrency
+Maintainer:     Yitz Gale <gale@sefer.org>
+Copyright:      (c) 2007-10 Don Stewart, 2017 Yitzchak Gale
+Homepage:       https://github.com/ygale/strict-concurrency
 build-depends:  base >= 4 && < 5, deepseq >= 1
 ghc-options:    -Wall
 build-type:     Simple
