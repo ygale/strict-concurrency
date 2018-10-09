@@ -1,6 +1,5 @@
 {-# LANGUAGE CPP, BangPatterns,
-             MagicHash, UnboxedTuples, ScopedTypeVariables
-#-}
+             MagicHash, UnboxedTuples, ScopedTypeVariables #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Concurrent.MVar.Strict
