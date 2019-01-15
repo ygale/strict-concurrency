@@ -51,6 +51,11 @@ import Control.Exception as Exception
 import Control.DeepSeq
 import Control.Monad ((>=>))
 
+-- Note: we use 'force' in many places one might expect to find `rnf` instead, and
+-- @force x `seq`@ where one might expect to see @deepseq@. This ensures that the
+-- value is forced to WHNF whether or not its NFData instance does so, and also
+-- ensures that the compiler knows this is the case.
+
 -- |Put a value into an 'MVar'.  If the 'MVar' is currently full,
 -- 'putMVar' will wait until it becomes empty.
 --
@@ -66,14 +71,14 @@ import Control.Monad ((>=>))
 --     fairness properties of abstractions built using 'MVar's.
 --
 putMVar  :: NFData a => MVar a -> a -> IO ()
-putMVar !mv !x = rnf x `seq` MV.putMVar mv x
+putMVar !mv x = evaluate (force x) >>= MV.putMVar mv
 
 -- | A non-blocking version of 'putMVar'.  The 'tryPutMVar' function
 -- attempts to put the value @a@ into the 'MVar', returning 'True' if
 -- it was successful, or 'False' otherwise.
 --
 tryPutMVar  :: NFData a => MVar a -> a -> IO Bool
-tryPutMVar !mv !x = rnf x `seq` MV.tryPutMVar mv x
+tryPutMVar !mv x = evaluate (force x) >>= MV.tryPutMVar mv
 
 #if !MIN_VERSION_base(4,7,0)
 -- |A non-blocking version of 'readMVar'.  The 'tryReadMVar' function
@@ -91,10 +96,7 @@ tryReadMVar !m = uninterruptibleMask $ \_ -> do
 
 -- |Create an 'MVar' which contains the supplied value.
 newMVar :: NFData a => a -> IO (MVar a)
-newMVar value =
-    newEmptyMVar        >>= \ mvar ->
-    putMVar mvar value  >>
-    return mvar
+newMVar value = evaluate (force value) >>= MV.newMVar
 
 {-|
   Take a value from an 'MVar', put a new value into the 'MVar' and
@@ -103,10 +105,14 @@ newMVar value =
   happens but before the put does.
 -}
 swapMVar :: NFData a => MVar a -> a -> IO a
-swapMVar !mvar new = seq (force new) $ mask $ \_ -> do
-    old <- takeMVar mvar
-    MV.putMVar mvar new
-    return old
+swapMVar !mvar new = do
+    -- Force this first to avoid holding the MVar too long and to ensure that
+    -- the MVar isn't left empty if forcing fails.
+    new' <- evaluate (force new)
+    mask $ \_ -> do
+      old <- takeMVar mvar
+      MV.putMVar mvar new'
+      return old
 
 {-|
   A safe wrapper for modifying the contents of an 'MVar'.  Like 'withMVar', 
@@ -115,7 +121,7 @@ swapMVar !mvar new = seq (force new) $ mask $ \_ -> do
 -}
 {-# INLINE modifyMVar_ #-}
 modifyMVar_ :: NFData a => MVar a -> (a -> IO a) -> IO ()
-modifyMVar_ m io = MV.modifyMVar_ m $ io >=> \p -> force p `seq` return p
+modifyMVar_ m io = MV.modifyMVar_ m $ io >=> evaluate . force
 
 {-|
   A slight variation on 'modifyMVar_' that allows a value to be
@@ -123,4 +129,4 @@ modifyMVar_ m io = MV.modifyMVar_ m $ io >=> \p -> force p `seq` return p
 -}
 {-# INLINE modifyMVar #-}
 modifyMVar :: NFData a => MVar a -> (a -> IO (a,b)) -> IO b
-modifyMVar m io = MV.modifyMVar m $ io >=> \pq -> force (fst pq) `seq` return pq
+modifyMVar m io = MV.modifyMVar m $ io >=> \pq -> evaluate (force (fst pq) `seq` pq)
