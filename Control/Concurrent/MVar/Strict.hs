@@ -43,9 +43,6 @@ import Control.Concurrent.MVar
   ( MVar, newEmptyMVar, readMVar, takeMVar
   , tryTakeMVar, isEmptyMVar, addMVarFinalizer, withMVar
   )
-#if MIN_VERSION_base(4,7,0)
-import Control.Concurrent.MVar (tryReadMVar)
-#endif
 import qualified Control.Concurrent.MVar as MV
 
 import Control.Exception as Exception
