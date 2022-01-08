@@ -29,7 +29,9 @@ module Control.Concurrent.MVar.Strict
         , swapMVar      -- :: MVar a -> a -> IO a
         , tryTakeMVar   -- :: MVar a -> IO (Maybe a)
         , tryPutMVar    -- :: MVar a -> a -> IO Bool
+#if !MIN_VERSION_base(4,7,0)
         , tryReadMVar   -- :: MVar a -> IO (Maybe a)
+#endif
         , isEmptyMVar   -- :: MVar a -> IO Bool
         , withMVar      -- :: MVar a -> (a -> IO b) -> IO b
         , modifyMVar_   -- :: MVar a -> (a -> IO a) -> IO ()
