@@ -1,5 +1,4 @@
-{-# LANGUAGE CPP, BangPatterns,
-             MagicHash, UnboxedTuples, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, BangPatterns, ScopedTypeVariables #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Concurrent.MVar.Strict
@@ -30,6 +29,9 @@ module Control.Concurrent.MVar.Strict
         , swapMVar      -- :: MVar a -> a -> IO a
         , tryTakeMVar   -- :: MVar a -> IO (Maybe a)
         , tryPutMVar    -- :: MVar a -> a -> IO Bool
+#if !MIN_VERSION_base(4,7,0)
+        , tryReadMVar   -- :: MVar a -> IO (Maybe a)
+#endif
         , isEmptyMVar   -- :: MVar a -> IO Bool
         , withMVar      -- :: MVar a -> (a -> IO b) -> IO b
         , modifyMVar_   -- :: MVar a -> (a -> IO a) -> IO ()
@@ -37,16 +39,21 @@ module Control.Concurrent.MVar.Strict
         , addMVarFinalizer -- :: MVar a -> IO () -> IO ()
     ) where
 
-import Control.Concurrent.MVar ( newEmptyMVar, takeMVar, 
-                  tryTakeMVar, isEmptyMVar, addMVarFinalizer
-                )
-import GHC.Exts
-import GHC.Base
-import GHC.MVar (MVar(MVar))
+import Control.Concurrent.MVar
+  ( MVar, newEmptyMVar, readMVar, takeMVar
+  , tryTakeMVar, isEmptyMVar, addMVarFinalizer, withMVar
+  )
+import qualified Control.Concurrent.MVar as MV
 
 import Control.Exception as Exception
 -- import Control.Parallel.Strategies
 import Control.DeepSeq
+import Control.Monad ((>=>))
+
+-- Note: we use 'force' in many places one might expect to find `rnf` instead, and
+-- @force x `seq`@ where one might expect to see @deepseq@. This ensures that the
+-- value is forced to WHNF whether or not its NFData instance does so, and also
+-- ensures that the compiler knows this is the case.
 
 -- |Put a value into an 'MVar'.  If the 'MVar' is currently full,
 -- 'putMVar' will wait until it becomes empty.
@@ -63,40 +70,32 @@ import Control.DeepSeq
 --     fairness properties of abstractions built using 'MVar's.
 --
 putMVar  :: NFData a => MVar a -> a -> IO ()
-#ifndef __HADDOCK__
-putMVar (MVar mvar#) !x = rnf x `seq` IO $ \ s# -> -- strict!
-    case putMVar# mvar# x s# of
-        s2# -> (# s2#, () #)
-#endif
+putMVar !mv x = evaluate (force x) >>= MV.putMVar mv
 
 -- | A non-blocking version of 'putMVar'.  The 'tryPutMVar' function
 -- attempts to put the value @a@ into the 'MVar', returning 'True' if
 -- it was successful, or 'False' otherwise.
 --
 tryPutMVar  :: NFData a => MVar a -> a -> IO Bool
-#ifndef __HADDOCK__
-tryPutMVar (MVar mvar#) !x = IO $ \ s# -> -- strict!
-    case tryPutMVar# mvar# x s# of
-        (# s, 0# #) -> (# s, False #)
-        (# s, _  #) -> (# s, True #)
+tryPutMVar !mv x = evaluate (force x) >>= MV.tryPutMVar mv
+
+#if !MIN_VERSION_base(4,7,0)
+-- |A non-blocking version of 'readMVar'.  The 'tryReadMVar' function
+-- returns immediately, with 'Nothing' if the 'MVar' was empty, or
+-- @'Just' a@ if the 'MVar' was full with contents @a@.
+tryReadMVar :: MVar a -> IO (Maybe a)
+-- This is a best-effort compatibility shim for really old GHC versions.
+-- It's not really what you'd call *right*.
+tryReadMVar !m = uninterruptibleMask $ \_ -> do
+  mv <- tryTakeMVar m
+  case mv of
+    Nothing -> return Nothing
+    Just v -> MV.tryPutMVar m v >> return mv
 #endif
 
 -- |Create an 'MVar' which contains the supplied value.
 newMVar :: NFData a => a -> IO (MVar a)
-newMVar value =
-    newEmptyMVar        >>= \ mvar ->
-    putMVar mvar value  >>
-    return mvar
-
-{-|
-  This is a combination of 'takeMVar' and 'putMVar'; ie. it takes the value
-  from the 'MVar', puts it back, and also returns it.
--}
-readMVar :: NFData a => MVar a -> IO a
-readMVar m = mask $ \_ -> do
-    a <- takeMVar m
-    putMVar m a
-    return a
+newMVar value = evaluate (force value) >>= MV.newMVar
 
 {-|
   Take a value from an 'MVar', put a new value into the 'MVar' and
@@ -105,27 +104,14 @@ readMVar m = mask $ \_ -> do
   happens but before the put does.
 -}
 swapMVar :: NFData a => MVar a -> a -> IO a
-swapMVar mvar new = mask $ \_ -> do
-    old <- takeMVar mvar
-    putMVar mvar new
-    return old
-
-{-|
-  'withMVar' is a safe wrapper for operating on the contents of an
-  'MVar'.  This operation is exception-safe: it will replace the
-  original contents of the 'MVar' if an exception is raised (see
-  "Control.Exception").
--}
-{-# INLINE withMVar #-}
--- inlining has been reported to have dramatic effects; see
--- http://www.haskell.org//pipermail/haskell/2006-May/017907.html
-withMVar :: NFData a => MVar a -> (a -> IO b) -> IO b
-withMVar m io = mask $ \unmask -> do
-    a <- takeMVar m
-    b <- Exception.catch (unmask (io a))
-            (\(e :: SomeException) -> do putMVar m a; throw e)
-    putMVar m a
-    return b
+swapMVar !mvar new = do
+    -- Force this first to avoid holding the MVar too long and to ensure that
+    -- the MVar isn't left empty if forcing fails.
+    new' <- evaluate (force new)
+    mask $ \_ -> do
+      old <- takeMVar mvar
+      MV.putMVar mvar new'
+      return old
 
 {-|
   A safe wrapper for modifying the contents of an 'MVar'.  Like 'withMVar', 
@@ -134,11 +120,7 @@ withMVar m io = mask $ \unmask -> do
 -}
 {-# INLINE modifyMVar_ #-}
 modifyMVar_ :: NFData a => MVar a -> (a -> IO a) -> IO ()
-modifyMVar_ m io = mask $ \unmask -> do
-    a  <- takeMVar m
-    a' <- Exception.catch (unmask (io a))
-            (\(e :: SomeException) -> do putMVar m a; throw e)
-    putMVar m a'
+modifyMVar_ m io = MV.modifyMVar_ m $ io >=> evaluate . force
 
 {-|
   A slight variation on 'modifyMVar_' that allows a value to be
@@ -146,10 +128,4 @@ modifyMVar_ m io = mask $ \unmask -> do
 -}
 {-# INLINE modifyMVar #-}
 modifyMVar :: NFData a => MVar a -> (a -> IO (a,b)) -> IO b
-modifyMVar m io = mask $ \unmask -> do
-    a      <- takeMVar m
-    (a',b) <- Exception.catch (unmask (io a))
-                (\(e :: SomeException) -> do putMVar m a; throw e)
-    putMVar m a'
-    return b
-
+modifyMVar m io = MV.modifyMVar m $ io >=> \pq -> evaluate (force (fst pq) `seq` pq)
